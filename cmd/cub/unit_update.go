@@ -346,6 +346,8 @@ func checkConflictingArgs(args []string) bool {
 	return isBulkPatchMode
 }
 
+var origUnit goclientnew.Unit
+
 func unitUpdateCmdRun(cmd *cobra.Command, args []string) error {
 	isBulkPatchMode := checkConflictingArgs(args)
 
@@ -358,6 +360,8 @@ func unitUpdateCmdRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	origUnit = *currentUnit
 
 	newParams := &goclientnew.UpdateUnitParams{}
 
@@ -761,9 +765,31 @@ func runBulkUnitUpdate() error {
 }
 
 func updateUnit(spaceID uuid.UUID, currentUnit *goclientnew.Unit, params *goclientnew.UpdateUnitParams) (*goclientnew.Unit, error) {
-	updatedRes, err := cubClientNew.UpdateUnitWithResponse(ctx, spaceID, currentUnit.UnitID, params, *currentUnit)
-	if cubapi.IsAPIError(err, updatedRes) {
-		return nil, cubapi.InterpretErrorGeneric(err, updatedRes)
+	resp, err := cubapi.HandleConflict(
+		ctx,
+		func() (cubapi.APIResponse, error) { // op
+			return cubClientNew.UpdateUnitWithResponse(ctx, spaceID, currentUnit.UnitID, params, *currentUnit)
+		},
+		func() (any, any, any, error) { // fetchAndCompareCurrentResource
+			actualUnit, err := apiGetUnitFromSlugInSpace(currentUnit.Slug, spaceID.String(), "*")
+			if err != nil {
+				return nil, nil, nil, err
+			}
+
+			return &origUnit, currentUnit, actualUnit, nil
+		},
+		func(version int64) { // bumpVersion
+			currentUnit.Version = version
+		},
+	)
+	if cubapi.IsAPIError(err, resp) {
+		return nil, cubapi.InterpretErrorGeneric(err, resp)
+	}
+
+	updatedRes, ok := resp.(*goclientnew.UpdateUnitResponse)
+	if !ok {
+		// this shouldn't happen, but better than panicing if it does
+		return nil, errors.New("response is of an invalid type")
 	}
 
 	return updatedRes.JSON200, nil
