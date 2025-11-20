@@ -116,11 +116,15 @@ func spaceUpdateCmdRun(cmd *cobra.Command, args []string) error {
 	return runSingleSpaceUpdate(args)
 }
 
+var origSpace goclientnew.Space
+
 func runSingleSpaceUpdate(args []string) error {
 	currentSpace, err := apiGetSpaceFromSlug(args[0], "*") // get all fields for RMW
 	if err != nil {
 		return err
 	}
+
+	origSpace = *currentSpace
 
 	currentSpaceID := currentSpace.SpaceID
 
@@ -190,9 +194,31 @@ func runSingleSpaceUpdate(args []string) error {
 		newBody.WhereTrigger = spaceUpdateArgs.whereTrigger
 	}
 
-	spaceRes, err := cubClientNew.UpdateSpaceWithResponse(ctx, currentSpaceID, *newBody)
-	if cubapi.IsAPIError(err, spaceRes) {
-		return cubapi.InterpretErrorGeneric(err, spaceRes)
+	resp, err := cubapi.HandleConflict(
+		ctx,
+		func() (cubapi.APIResponse, error) { // update op
+			return cubClientNew.UpdateSpaceWithResponse(ctx, currentSpaceID, *newBody)
+		},
+		func() (any, any, any, error) { // fetch actual space on server for comparison
+			actualSpace, err := apiGetSpaceFromSlug(args[0], "*")
+			if err != nil {
+				return nil, nil, nil, err
+			}
+
+			return origSpace, newBody, actualSpace, nil
+		},
+		func(version int64) { // bump version if no conflict
+			newBody.Version = version
+		},
+	)
+	if cubapi.IsAPIError(err, resp) {
+		return cubapi.InterpretErrorGeneric(err, resp)
+	}
+
+	spaceRes, ok := resp.(*goclientnew.UpdateSpaceResponse)
+	if !ok {
+		// this shouldn't happen, but better than a panic if it does
+		return errors.New("response was of an unexpected type")
 	}
 
 	spaceDetails := spaceRes.JSON200
