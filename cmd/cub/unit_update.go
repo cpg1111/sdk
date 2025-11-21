@@ -767,6 +767,7 @@ func runBulkUnitUpdate() error {
 func updateUnit(spaceID uuid.UUID, currentUnit *goclientnew.Unit, params *goclientnew.UpdateUnitParams) (*goclientnew.Unit, error) {
 	resp, err := cubapi.HandleConflict(
 		ctx,
+		flagReplace,
 		func() (cubapi.APIResponse, error) { // op
 			return cubClientNew.UpdateUnitWithResponse(ctx, spaceID, currentUnit.UnitID, params, *currentUnit)
 		},

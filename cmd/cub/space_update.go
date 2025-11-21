@@ -196,6 +196,7 @@ func runSingleSpaceUpdate(args []string) error {
 
 	resp, err := cubapi.HandleConflict(
 		ctx,
+		flagReplace,
 		func() (cubapi.APIResponse, error) { // update op
 			return cubClientNew.UpdateSpaceWithResponse(ctx, currentSpaceID, *newBody)
 		},

@@ -6,9 +6,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 
-	"github.com/cockroachdb/errors"
 	"github.com/confighub/sdk/cubapi"
 	goclientnew "github.com/confighub/sdk/openapi/goclient-new"
 	"github.com/google/uuid"
@@ -58,8 +58,7 @@ func unitSetTargetCmdRun(cmd *cobra.Command, args []string) error {
 	}
 }
 
-// createTargetPatch creates a JSON patch for setting a target on a unit
-func createTargetPatch(targetSlug string) ([]byte, error) {
+func getTargetID(targetSlug string) (uuid.UUID, error) {
 	var targetID uuid.UUID
 	if targetSlug == "-" {
 		targetID = uuid.Nil
@@ -72,10 +71,17 @@ func createTargetPatch(targetSlug string) ([]byte, error) {
 			func(t *goclientnew.Target) string { return t.TargetID.String() },
 		)
 		if err != nil {
-			return nil, err
+			return targetID, err
 		}
 		targetID = id
 	}
+
+	return targetID, nil
+}
+
+// createTargetPatch creates a JSON patch for setting a target on a unit
+func createTargetPatch(targetSlug string) ([]byte, error) {
+	targetID, err := getTargetID(targetSlug)
 
 	// Create JSON patch with only the TargetID field
 	patchData := map[string]interface{}{
@@ -102,6 +108,7 @@ func runSingleUnitSetTarget(unitSlug, targetSlug string) error {
 
 	resp, err := cubapi.HandleConflict(
 		ctx,
+		flagReplace,
 		func() (cubapi.APIResponse, error) {
 			return cubClientNew.PatchUnitWithBodyWithResponse(
 				ctx,
@@ -113,21 +120,16 @@ func runSingleUnitSetTarget(unitSlug, targetSlug string) error {
 			)
 		},
 		func() (any, any, any, error) {
-			var (
-				updateUnit, actualUnit *goclientnew.Unit
-				err                    error
-			)
+			var updateUnit, actualUnit *goclientnew.Unit
 
 			*updateUnit = *configUnit
-			updateUnit.TargetID, err = parseEntityIdentifierSingle[goclientnew.Target](
-				targetSlug,
-				EntityTypeTarget,
-				apiGetTargetFromSlugInSpaceCore,
-				func(t *goclientnew.Target) string { return t.TargetID.String() },
-			)
+
+			targetID, err := getTargetID(targetSlug)
 			if err != nil {
 				return nil, nil, nil, err
 			}
+
+			updateUnit.TargetID = &targetID
 
 			actualUnit, err = apiGetUnitFromSlug(unitSlug, "*")
 			if err != nil {

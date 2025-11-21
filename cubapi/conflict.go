@@ -2,11 +2,10 @@ package cubapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
-
-	"github.com/cockroachdb/errors"
 )
 
 const (
@@ -26,6 +25,7 @@ var (
 // will retry the operation, unless the conflict is unreconcilable
 func HandleConflict(
 	ctx context.Context,
+	replace bool, // if the replace flag is set, we need to handle changes differently
 	op func() (APIResponse, error), // the actual update operation
 	fetchResourcesForComparison func() (any, any, any, error), // compare the API resource on server to update
 	bumpVersion func(version int64), // set the version on the resource for retrying
@@ -69,7 +69,7 @@ func HandleConflict(
 				return nil, err
 			}
 
-			conflicts, ok := compareResources(originalResource, currentResource, actualResource)
+			conflicts, ok := compareResources(originalResource, currentResource, actualResource, replace)
 			if !ok { // conflicts
 				if conflicts != nil {
 					printConflicts(conflicts)
@@ -97,7 +97,7 @@ func HandleConflict(
 // compareResources takes the original resource the update read, the update (current)
 // and the actual value on the server and diffs them for an actual conflict, i.e a value that is different
 // for both the read value to update, and the actual value on the server and the original
-func compareResources(original, current, actual any) (map[string]any, bool) {
+func compareResources(original, current, actual any, isReplacing bool) (map[string]any, bool) {
 	if reflect.DeepEqual(current, actual) { // if everything is equal, immediately return true
 		return nil, true
 	}
@@ -129,7 +129,10 @@ func compareResources(original, current, actual any) (map[string]any, bool) {
 
 			serverDelta := !reflect.DeepEqual(origField.Interface(), actualField.Interface())
 			clientDelta := !reflect.DeepEqual(origField.Interface(), currField.Interface())
-			if serverDelta && clientDelta || fieldName == "Version" { // missing change
+
+			// if we are merging, we need to check if the same value has changed on the server, if we are replacing,
+			// we need to check if any value has changed on the server
+			if serverDelta && clientDelta || fieldName == "Version" || (isReplacing && serverDelta) { // missing change
 				diffs[fieldName] = actualField.Interface()
 			}
 		}
