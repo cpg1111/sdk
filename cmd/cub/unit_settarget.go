@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/cockroachdb/errors"
 	"github.com/confighub/sdk/cubapi"
 	goclientnew "github.com/confighub/sdk/openapi/goclient-new"
 	"github.com/google/uuid"
@@ -99,16 +100,54 @@ func runSingleUnitSetTarget(unitSlug, targetSlug string) error {
 		return err
 	}
 
-	unitRes, err := cubClientNew.PatchUnitWithBodyWithResponse(
+	resp, err := cubapi.HandleConflict(
 		ctx,
-		uuid.MustParse(selectedSpaceID),
-		configUnit.UnitID,
-		newParams,
-		"application/merge-patch+json",
-		bytes.NewReader(patchJSON),
+		func() (cubapi.APIResponse, error) {
+			return cubClientNew.PatchUnitWithBodyWithResponse(
+				ctx,
+				uuid.MustParse(selectedSpaceID),
+				configUnit.UnitID,
+				newParams,
+				"application/merge-patch+json",
+				bytes.NewReader(patchJSON),
+			)
+		},
+		func() (any, any, any, error) {
+			var (
+				updateUnit, actualUnit *goclientnew.Unit
+				err                    error
+			)
+
+			*updateUnit = *configUnit
+			updateUnit.TargetID, err = parseEntityIdentifierSingle[goclientnew.Target](
+				targetSlug,
+				EntityTypeTarget,
+				apiGetTargetFromSlugInSpaceCore,
+				func(t *goclientnew.Target) string { return t.TargetID.String() },
+			)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+
+			actualUnit, err = apiGetUnitFromSlug(unitSlug, "*")
+			if err != nil {
+				return nil, nil, nil, err
+			}
+
+			return configUnit, updateUnit, actualUnit, nil
+		},
+		func(version int64) {
+			configUnit.Version = version
+		},
 	)
-	if cubapi.IsAPIError(err, unitRes) {
-		return cubapi.InterpretErrorGeneric(err, unitRes)
+	if cubapi.IsAPIError(err, resp) {
+		return cubapi.InterpretErrorGeneric(err, resp)
+	}
+
+	unitRes, ok := resp.(*goclientnew.PatchUnitResponse)
+	if !ok {
+		// this shouldn't be able to happen, but if it does, better than panicing
+		return errors.New("respose was of an unexpected type")
 	}
 
 	unitDetails := unitRes.JSON200
